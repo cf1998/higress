@@ -15,6 +15,7 @@ package suite
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/alibaba/higress/test/e2e/conformance/utils/config"
@@ -22,6 +23,13 @@ import (
 	"github.com/alibaba/higress/test/e2e/conformance/utils/roundtripper"
 	"istio.io/istio/pilot/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	TestAreaAll   = "all"
+	TestAreaSetup = "setup"
+	TestAreaRun   = "run"
+	TessAreaClean = "clean"
 )
 
 // ConformanceTestSuite defines the test suite used to run Gateway API
@@ -36,6 +44,7 @@ type ConformanceTestSuite struct {
 	BaseManifests     []string
 	Applier           kubernetes.Applier
 	SkipTests         sets.Set
+	ExecuteTests      sets.Set
 	TimeoutConfig     config.TimeoutConfig
 	SupportedFeatures sets.Set
 }
@@ -44,6 +53,7 @@ type ConformanceTestSuite struct {
 type Options struct {
 	SupportedFeatures sets.Set
 	ExemptFeatures    sets.Set
+	ExecuteTests      string
 
 	EnableAllSupportedFeatures bool
 	Client                     client.Client
@@ -60,6 +70,9 @@ type Options struct {
 	// resources such as Gateways should be cleaned up after the run.
 	CleanupBaseResources bool
 	TimeoutConfig        config.TimeoutConfig
+
+	// IsEnvoyConfigTest indicates whether or not the test is for envoy config
+	IsEnvoyConfigTest bool
 }
 
 type WASMOptions struct {
@@ -87,6 +100,8 @@ func New(s Options) *ConformanceTestSuite {
 		} else {
 			s.SupportedFeatures.Insert(string(WASMGoConformanceFeature))
 		}
+	} else if s.IsEnvoyConfigTest {
+		s.SupportedFeatures.Insert(string(EnvoyConfigConformanceFeature))
 	} else if s.EnableAllSupportedFeatures {
 		s.SupportedFeatures = AllFeatures
 	}
@@ -104,6 +119,7 @@ func New(s Options) *ConformanceTestSuite {
 		BaseManifests:     s.BaseManifests,
 		SupportedFeatures: s.SupportedFeatures,
 		GatewayAddress:    s.GatewayAddress,
+		ExecuteTests:      sets.NewSet(),
 		Applier: kubernetes.Applier{
 			NamespaceLabels: s.NamespaceLabels,
 		},
@@ -118,6 +134,14 @@ func New(s Options) *ConformanceTestSuite {
 			"base/eureka.yaml",
 			"base/nacos.yaml",
 			"base/dubbo.yaml",
+			"base/opa.yaml",
+		}
+	}
+
+	testNames := strings.Split(s.ExecuteTests, ",")
+	for i := range testNames {
+		if testNames[i] != "" {
+			suite.ExecuteTests = suite.ExecuteTests.Insert(testNames[i])
 		}
 	}
 
@@ -154,13 +178,24 @@ func (suite *ConformanceTestSuite) Setup(t *testing.T) {
 	t.Logf("🌱 Supported Features: %+v", suite.SupportedFeatures.UnsortedList())
 }
 
-// RunWithTests runs the provided set of conformance tests.
+// Run runs the provided set of conformance tests.
 func (suite *ConformanceTestSuite) Run(t *testing.T, tests []ConformanceTest) {
 	t.Logf("🚀 Start Running %d Test Cases: \n\n%s", len(tests), globalConformanceTestsListInfo(tests))
 	for _, test := range tests {
 		t.Run(test.ShortName, func(t *testing.T) {
 			test.Run(t, suite)
 		})
+	}
+}
+
+// Clean cleans up the base resources installed by Setup.
+func (suite *ConformanceTestSuite) Clean(t *testing.T) {
+	if suite.Cleanup {
+		t.Logf("🧹 Test Cleanup: Ensuring base resources have been cleaned up")
+
+		for _, baseManifest := range suite.BaseManifests {
+			suite.Applier.MustDelete(t, suite.Client, suite.TimeoutConfig, baseManifest)
+		}
 	}
 }
 
@@ -205,6 +240,10 @@ func (test *ConformanceTest) Run(t *testing.T, suite *ConformanceTestSuite) {
 
 	// check that the test should not be skipped
 	if suite.SkipTests.Contains(test.ShortName) {
+		t.Skipf("🏊🏼 Skipping %s: test explicitly skipped", test.ShortName)
+	}
+
+	if len(suite.ExecuteTests) > 0 && !suite.ExecuteTests.Contains(test.ShortName) {
 		t.Skipf("🏊🏼 Skipping %s: test explicitly skipped", test.ShortName)
 	}
 

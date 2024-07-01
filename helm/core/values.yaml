@@ -1,5 +1,11 @@
 revision: ""
 global:
+  liteMetrics: true
+  xdsMaxRecvMsgSize: "104857600"
+  defaultUpstreamConcurrencyThreshold: 10000
+  enableSRDS: true
+  onDemandRDS: false
+  hostRDSMergeSubset: false
   onlyPushRouteCluster: true
   # IngressClass filters which ingress resources the higress controller watches.
   # The default ingress class is higress.
@@ -10,7 +16,7 @@ global:
   # resources in the k8s cluster.
   ingressClass: "higress"
   watchNamespace: ""
-  disableAlpnH2: true
+  disableAlpnH2: false
   enableStatus: true
   # whether to use autoscaling/v2 template for HPA settings
   # for internal usage only, not to be configured by users.
@@ -148,11 +154,17 @@ global:
     # The number of successive failed probes before indicating readiness failure.
     readinessFailureThreshold: 30
 
+    # The number of successive successed probes before indicating readiness success.
+    readinessSuccessThreshold: 30
+
     # The initial delay for readiness probes in seconds.
     readinessInitialDelaySeconds: 1
 
     # The period between readiness probes.
     readinessPeriodSeconds: 2
+
+    # The readiness timeout seconds
+    readinessTimeoutSeconds: 3
 
     # Resources for the sidecar.
     resources:
@@ -326,6 +338,20 @@ global:
   # Use the Mesh Control Protocol (MCP) for configuring Istiod. Requires an MCP source.
   useMCP: false
 
+  # Observability (o11y) configurations
+  o11y:
+    enabled: false
+    promtail:
+      image:
+        repository: grafana/promtail
+        tag: 2.9.4
+      port: 3101
+      resources:
+        limits:
+          cpu: 500m
+          memory: 2Gi
+      securityContext: {}
+
   # The name of the CA for workload certificates.
   # For example, when caName=GkeWorkloadCertificate, GKE workload certificates
   # will be used as the certificates for workloads.
@@ -370,6 +396,24 @@ gateway:
   replicas: 2
   image: gateway
 
+  # -- Use a `DaemonSet` or `Deployment`
+  kind: Deployment
+
+  # The number of successive failed probes before indicating readiness failure.
+  readinessFailureThreshold: 30
+
+  # The number of successive successed probes before indicating readiness success.
+  readinessSuccessThreshold: 1
+
+  # The initial delay for readiness probes in seconds.
+  readinessInitialDelaySeconds: 1
+
+  # The period between readiness probes.
+  readinessPeriodSeconds: 2
+
+  # The readiness timeout seconds
+  readinessTimeoutSeconds: 3
+
   hub: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress
   tag: ""
   # revision declares which revision this gateway is a part of
@@ -391,7 +435,8 @@ gateway:
 
   # Pod environment variables
   env: {}
-
+  httpPort: 80
+  httpsPort: 443
   hostNetwork: false
 
   # Labels to apply to all resources
@@ -503,6 +548,12 @@ controller:
       "targetPort": 8888,
     },
     {
+      "name": "http-solver",
+      "protocol": "TCP",
+      "port": 8889,
+      "targetPort": 8889,
+    },
+    {
       "name": "grpc",
       "protocol": "TCP",
       "port": 15051,
@@ -540,6 +591,9 @@ controller:
     minReplicas: 1
     maxReplicas: 5
     targetCPUUtilizationPercentage: 80
+  automaticHttps:
+    enabled: true
+    email: ""
   
 ## Discovery Settings
 pilot:

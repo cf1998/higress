@@ -17,7 +17,9 @@ package hgctl
 import (
 	"fmt"
 
+	"github.com/alibaba/higress/cmd/hgctl/config"
 	"github.com/spf13/cobra"
+	"istio.io/istio/istioctl/pkg/writer/envoy/configdump"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 )
 
@@ -45,21 +47,26 @@ func routeConfigCmd() *cobra.Command {
 }
 
 func runRouteConfig(c *cobra.Command, args []string) error {
-	configDump, err := retrieveConfigDump(args, false)
+	if len(args) != 0 {
+		podName = args[0]
+	}
+	configWriter, err := config.GetEnvoyConfigWriter(&config.GetEnvoyConfigOptions{
+		PodName:         podName,
+		PodNamespace:    podNamespace,
+		BindAddress:     bindAddress,
+		Output:          output,
+		EnvoyConfigType: config.RouteEnvoyConfigType,
+		IncludeEds:      true,
+	}, c.OutOrStdout())
 	if err != nil {
 		return err
 	}
-
-	route, err := GetXDSResource(RouteEnvoyConfigType, configDump)
-	if err != nil {
-		return err
+	switch output {
+	case summaryOutput:
+		return configWriter.PrintRouteSummary(configdump.RouteFilter{Verbose: true})
+	case jsonOutput, yamlOutput:
+		return configWriter.PrintRouteDump(configdump.RouteFilter{Verbose: true}, output)
+	default:
+		return fmt.Errorf("output format %q not supported", output)
 	}
-
-	out, err := formatGatewayConfig(route, output)
-	if err != nil {
-		return err
-	}
-
-	_, err = fmt.Fprintln(c.OutOrStdout(), string(out))
-	return err
 }

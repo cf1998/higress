@@ -20,10 +20,12 @@ import (
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/alibaba/higress/pkg/cert"
 	"github.com/hashicorp/go-multierror"
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/model"
@@ -52,6 +54,7 @@ import (
 	"github.com/alibaba/higress/pkg/ingress/kube/secret"
 	"github.com/alibaba/higress/pkg/ingress/kube/util"
 	. "github.com/alibaba/higress/pkg/ingress/log"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var (
@@ -340,7 +343,7 @@ func extractTLSSecretName(host string, tls []ingress.IngressTLS) string {
 	return ""
 }
 
-func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapper *common.WrapperConfig) error {
+func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapper *common.WrapperConfig, httpsCredentialConfig *cert.Config) error {
 	// Ignore canary config.
 	if wrapper.AnnotationsConfig.IsCanary() {
 		return nil
@@ -383,9 +386,9 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 			}
 			wrapperGateway.Gateway.Servers = append(wrapperGateway.Gateway.Servers, &networking.Server{
 				Port: &networking.Port{
-					Number:   80,
+					Number:   c.options.GatewayHttpPort,
 					Protocol: string(protocol.HTTP),
-					Name:     common.CreateConvertedName("http-80-ingress", c.options.ClusterId),
+					Name:     common.CreateConvertedName("http-"+strconv.FormatUint(uint64(c.options.GatewayHttpPort), 10)+"-ingress", c.options.ClusterId),
 				},
 				Hosts: []string{rule.Host},
 			})
@@ -407,13 +410,33 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 
 		// Get tls secret matching the rule host
 		secretName := extractTLSSecretName(rule.Host, ingressV1.TLS)
+		secretNamespace := cfg.Namespace
+		if secretName != "" {
+			if httpsCredentialConfig != nil && httpsCredentialConfig.FallbackForInvalidSecret {
+				_, err := c.secretController.Lister().Secrets(secretNamespace).Get(secretName)
+				if err != nil {
+					if k8serrors.IsNotFound(err) {
+						// If there is no matching secret, try to get it from configmap.
+						secretName = httpsCredentialConfig.MatchSecretNameByDomain(rule.Host)
+						secretNamespace = c.options.SystemNamespace
+					}
+				}
+			}
+		} else {
+			// If there is no matching secret, try to get it from configmap.
+			if httpsCredentialConfig != nil {
+				secretName = httpsCredentialConfig.MatchSecretNameByDomain(rule.Host)
+				secretNamespace = c.options.SystemNamespace
+			}
+		}
+
 		if secretName == "" {
 			// There no matching secret, so just skip.
 			continue
 		}
 
 		domainBuilder.Protocol = common.HTTPS
-		domainBuilder.SecretName = path.Join(c.options.ClusterId, cfg.Namespace, secretName)
+		domainBuilder.SecretName = path.Join(c.options.ClusterId, secretNamespace, secretName)
 
 		// There is a matching secret and the gateway has already a tls secret.
 		// We should report the duplicated tls secret event.
@@ -428,14 +451,14 @@ func (c *controller) ConvertGateway(convertOptions *common.ConvertOptions, wrapp
 		// Append https server
 		wrapperGateway.Gateway.Servers = append(wrapperGateway.Gateway.Servers, &networking.Server{
 			Port: &networking.Port{
-				Number:   443,
+				Number:   uint32(c.options.GatewayHttpsPort),
 				Protocol: string(protocol.HTTPS),
-				Name:     common.CreateConvertedName("https-443-ingress", c.options.ClusterId),
+				Name:     common.CreateConvertedName("https-"+strconv.FormatUint(uint64(c.options.GatewayHttpsPort), 10)+"-ingress", c.options.ClusterId),
 			},
 			Hosts: []string{rule.Host},
 			Tls: &networking.ServerTLSSettings{
 				Mode:           networking.ServerTLSSettings_SIMPLE,
-				CredentialName: credentials.ToKubernetesIngressResource(c.options.RawClusterId, cfg.Namespace, secretName),
+				CredentialName: credentials.ToKubernetesIngressResource(c.options.RawClusterId, secretNamespace, secretName),
 			},
 		})
 
@@ -878,15 +901,28 @@ func (c *controller) storeBackendTrafficPolicy(wrapper *common.WrapperConfig, ba
 	}
 	if common.ValidateBackendResource(backend.Resource) && wrapper.AnnotationsConfig.Destination != nil {
 		for _, dest := range wrapper.AnnotationsConfig.Destination.McpDestination {
+			portNumber := dest.Destination.GetPort().GetNumber()
 			serviceKey := common.ServiceKey{
 				Namespace:   "mcp",
 				Name:        dest.Destination.Host,
+				Port:        int32(portNumber),
 				ServiceFQDN: dest.Destination.Host,
 			}
 			if _, exist := store[serviceKey]; !exist {
-				store[serviceKey] = &common.WrapperTrafficPolicy{
-					TrafficPolicy: &networking.TrafficPolicy{},
-					WrapperConfig: wrapper,
+				if serviceKey.Port != 0 {
+					store[serviceKey] = &common.WrapperTrafficPolicy{
+						PortTrafficPolicy: &networking.TrafficPolicy_PortTrafficPolicy{
+							Port: &networking.PortSelector{
+								Number: uint32(serviceKey.Port),
+							},
+						},
+						WrapperConfig: wrapper,
+					}
+				} else {
+					store[serviceKey] = &common.WrapperTrafficPolicy{
+						TrafficPolicy: &networking.TrafficPolicy{},
+						WrapperConfig: wrapper,
+					}
 				}
 			}
 		}
@@ -1226,8 +1262,10 @@ func createRuleKey(annots map[string]string, hostAndPath string) string {
 		if idx := strings.Index(k, annotations.MatchHeader); idx != -1 {
 			key := k[start:idx] + k[idx+len(annotations.MatchHeader)+1:]
 			headers = append(headers, [2]string{key, val})
-		}
-		if idx := strings.Index(k, annotations.MatchQuery); idx != -1 {
+		} else if idx := strings.Index(k, annotations.MatchPseudoHeader); idx != -1 {
+			key := k[start:idx] + ":" + k[idx+len(annotations.MatchPseudoHeader)+1:]
+			headers = append(headers, [2]string{key, val})
+		} else if idx := strings.Index(k, annotations.MatchQuery); idx != -1 {
 			key := k[start:idx] + k[idx+len(annotations.MatchQuery)+1:]
 			params = append(params, [2]string{key, val})
 		}

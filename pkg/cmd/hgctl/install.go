@@ -28,7 +28,7 @@ import (
 
 const (
 	setFlagHelpStr = `Override an higress profile value, e.g. to choose a profile
-(--set profile=local-k8s), or override profile values (--set gateway.replicas=2), or override helm values (--set values.global.proxy.resources.requsts.cpu=500m).`
+(--set profile=local-k8s), or override profile values (--set gateway.replicas=2), or override helm values (--set values.global.proxy.resources.requests.cpu=500m).`
 	// manifestsFlagHelpStr is the command line description for --manifests
 	manifestsFlagHelpStr = `Specify a path to a directory of profiles
 (e.g. ~/Downloads/higress/manifests).`
@@ -52,6 +52,8 @@ type InstallArgs struct {
 	Set []string
 	// ManifestsPath is a path to a ManifestsPath and profiles directory in the local filesystem with a release tgz.
 	ManifestsPath string
+	// Devel if set true when version is latest, it will get latest version, otherwise it will get latest stable version
+	Devel bool
 }
 
 func (a *InstallArgs) String() string {
@@ -67,6 +69,7 @@ func addInstallFlags(cmd *cobra.Command, args *InstallArgs) {
 	cmd.PersistentFlags().StringSliceVarP(&args.InFilenames, "filename", "f", nil, filenameFlagHelpStr)
 	cmd.PersistentFlags().StringArrayVarP(&args.Set, "set", "s", nil, setFlagHelpStr)
 	cmd.PersistentFlags().StringVarP(&args.ManifestsPath, "manifests", "d", "", manifestsFlagHelpStr)
+	cmd.PersistentFlags().BoolVar(&args.Devel, "devel", false, "use development versions (alpha, beta, and release candidate releases), If version is set, this is ignored")
 }
 
 // --manifests is an alias for --set installPackagePath=
@@ -98,7 +101,7 @@ func newInstallCmd() *cobra.Command {
   hgctl install --set profile=local-k8s  --set global.enableIstioAPI=true --set gateway.replicas=2"
 
   # To override helm setting
-  hgctl install --set profile=local-k8s  --set values.global.proxy.resources.requsts.cpu=500m"
+  hgctl install --set profile=local-k8s  --set values.global.proxy.resources.requests.cpu=500m"
 
 
 `,
@@ -141,7 +144,7 @@ func install(writer io.Writer, iArgs *InstallArgs) error {
 		return err
 	}
 
-	err = installManifests(profile, writer)
+	err = installManifests(profile, writer, iArgs.Devel)
 	if err != nil {
 		return fmt.Errorf("failed to install manifests: %v", err)
 	}
@@ -172,7 +175,7 @@ func promptInstall(writer io.Writer, profileName string) bool {
 
 func promptProfileName(writer io.Writer) string {
 	answer := ""
-	fmt.Fprintf(writer, "\nPlease select higress install configration profile:\n")
+	fmt.Fprintf(writer, "\nPlease select higress install configuration profile:\n")
 	fmt.Fprintf(writer, "\n1.Install higress to local kubernetes cluster like kind etc.\n")
 	fmt.Fprintf(writer, "\n2.Install higress to kubernetes cluster\n")
 	fmt.Fprintf(writer, "\n3.Install higress to local docker environment\n")
@@ -192,8 +195,8 @@ func promptProfileName(writer io.Writer) string {
 
 }
 
-func installManifests(profile *helm.Profile, writer io.Writer) error {
-	installer, err := installer.NewInstaller(profile, writer, false)
+func installManifests(profile *helm.Profile, writer io.Writer, devel bool) error {
+	installer, err := installer.NewInstaller(profile, writer, false, devel, installer.InstallInstallerMode)
 	if err != nil {
 		return err
 	}

@@ -76,6 +76,7 @@ func getServerCommand() *cobra.Command {
 		Debug:                true,
 		NativeIstio:          true,
 		HttpAddress:          ":8888",
+		CertHttpAddress:      ":8889",
 		GrpcAddress:          ":15051",
 		GrpcKeepAliveOptions: keepalive.DefaultOption(),
 		XdsOptions: bootstrap.XdsOptions{
@@ -86,7 +87,7 @@ func getServerCommand() *cobra.Command {
 	}
 
 	serveCmd.PersistentFlags().StringVar(&serverArgs.GatewaySelectorKey, "gatewaySelectorKey", "higress", "gateway resource selector label key")
-	serveCmd.PersistentFlags().StringVar(&serverArgs.GatewaySelectorValue, "gatewaySelectorValue", "higress-gateway", "gateway resource selector label value")
+	serveCmd.PersistentFlags().StringVar(&serverArgs.GatewaySelectorValue, "gatewaySelectorValue", "higress-system-higress-gateway", "gateway resource selector label value")
 	serveCmd.PersistentFlags().BoolVar(&serverArgs.EnableStatus, "enableStatus", true, "enable the ingress status syncer which use to update the ip in ingress's status")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.IngressClass, "ingressClass", innerconstants.DefaultIngressClass, "if not empty, only watch the ingresses have the specified class, otherwise watch all ingresses")
 	serveCmd.PersistentFlags().StringVar(&serverArgs.WatchNamespace, "watchNamespace", "", "if not empty, only wath the ingresses in the specified namespace, otherwise watch in all namespacees")
@@ -112,6 +113,14 @@ func getServerCommand() *cobra.Command {
 
 	serveCmd.PersistentFlags().IntVar(&serverArgs.RegistryOptions.KubeOptions.KubernetesAPIBurst, "kubernetesApiBurst", 160,
 		"Maximum burst for throttle when communicating with the kubernetes API")
+	serveCmd.PersistentFlags().Uint32Var(&serverArgs.GatewayHttpPort, "gatewayHttpPort", 80,
+		"Http listening port of gateway pod")
+	serveCmd.PersistentFlags().Uint32Var(&serverArgs.GatewayHttpsPort, "gatewayHttpsPort", 443,
+		"Https listening port of gateway pod")
+
+	serveCmd.PersistentFlags().BoolVar(&serverArgs.EnableAutomaticHttps, "enableAutomaticHttps", false, "if true, enables automatic https")
+	serveCmd.PersistentFlags().StringVar(&serverArgs.AutomaticHttpsEmail, "automaticHttpsEmail", "", "email for automatic https")
+	serveCmd.PersistentFlags().StringVar(&serverArgs.CertHttpAddress, "certHttpAddress", serverArgs.CertHttpAddress, "the cert http address")
 
 	loggingOptions.AttachCobraFlags(serveCmd)
 	serverArgs.GrpcKeepAliveOptions.AttachCobraFlags(serveCmd)

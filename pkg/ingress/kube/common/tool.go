@@ -36,7 +36,6 @@ func ValidateBackendResource(resource *v1.TypedLocalObjectReference) bool {
 	if resource == nil || resource.APIGroup == nil ||
 		*resource.APIGroup != netv1.SchemeGroupVersion.Group ||
 		resource.Kind != "McpBridge" || resource.Name != "default" {
-		IngressLog.Warnf("invalid mcpbridge resource: %v", resource)
 		return false
 	}
 	return true
@@ -49,13 +48,15 @@ func V1Available(client kube.Client) bool {
 
 	serverVersion, err := client.GetKubernetesVersion()
 	if err != nil {
-		return false
+		// Consider the new ingress package is available as default
+		return true
 	}
 
 	runningVersion, err := version.ParseGeneric(serverVersion.String())
 	if err != nil {
+		// Consider the new ingress package is available as default
 		IngressLog.Errorf("unexpected error parsing running Kubernetes version: %v", err)
-		return false
+		return true
 	}
 
 	return runningVersion.AtLeast(version119)
